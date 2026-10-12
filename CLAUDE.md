@@ -43,6 +43,7 @@ trafficgoat/
 │   ├── safety.py             # Target allowlist (RFC1918/loopback) + UnsafeTargetError
 │   ├── generators/           # Traffic generator implementations
 │   │   ├── base.py           # BaseGenerator ABC (threading, throttling)
+│   │   ├── _netio.py         # packet_sender(): reused L3 socket for scapy generators
 │   │   ├── tcp.py            # TCP SYN, connect, flag scans
 │   │   ├── udp.py            # UDP random, DNS, NTP
 │   │   ├── icmp.py           # ICMP echo, mixed types
@@ -98,7 +99,8 @@ Generator threads -> stats.update() -> StatsCollector -> Socket.IO -> Dashboard 
 - **`stats.py`** - Thread-safe statistics. Uses locks, supports callbacks for real-time broadcasting.
 - **`safety.py`** - `check_target()` / `UnsafeTargetError`. Default-denies non-private IPs; `--allow-public` opts in. Hostnames that resolve to a mix of public+private are rejected.
 - **`generators/base.py`** - Abstract base with `generate()`, `throttle()`, `should_stop()`.
-- **`generators/auto.py`** - Multi-destination generators: `AutoRawGenerator`, `AutoBulkGenerator`, `AutoHTTPGenerator`, `AutoTCPConnectGenerator`, `AutoCurlGenerator`, `AutoSaaSGenerator`. Includes ~18 raw protocols (TCP/UDP/ICMP plus DNS, NTP, SNMP, SIP, LDAP, MQTT, CoAP, RTSP, TFTP, NFS, STUN, SMB, RDP, etc.).
+- **`generators/_netio.py`** - `packet_sender(dry_run)` context manager: hands back a `send(pkt)` callable backed by a single reused scapy L3 socket (avoids a socket open/close per packet). No-op in dry-run; falls back to scapy's module-level `send()` if a persistent socket can't be created.
+- **`generators/auto.py`** - Multi-destination generators: `AutoRawGenerator`, `AutoBulkGenerator`, `AutoHTTPGenerator`, `AutoTCPConnectGenerator`, `AutoCurlGenerator`, `AutoSaaSGenerator`. `AutoRawGenerator` builds 18 raw protocols: TCP SYN, UDP, ICMP, DNS, NTP, SNMP, SIP, LDAP, RADIUS, MQTT, Syslog, Memcached, Modbus, BGP, QUIC, STUN, Kerberos, NetFlow.
 - **`generators/malicious.py`** - Aggressive patterns (bruteforce / ddos / amplification). Gated behind `enable_malicious=True` (CLI: `--enable-malicious`); `portscan` is allowed without the flag.
 - **`modes/auto.py`** - Load presets (light/medium/heavy) with tuned rates and batch sizes.
 - **`web/app.py`** - Flask factory with Socket.IO; reads `TRAFFICGOAT_TOKEN` / `TRAFFICGOAT_SECRET_KEY`; auto-generates an auth token if neither is set.
@@ -160,7 +162,9 @@ Web API hardening:
 ### Bandwidth Optimization
 - `AutoBulkGenerator` sends large UDP packets (~1400 bytes, near MTU) in batches.
 - Pre-generated payloads avoid per-packet `os.urandom()` overhead.
-- Batch sending via `send(packets, verbose=0, inter=0)` maximizes throughput.
+- Scapy generators send through `packet_sender()` (`generators/_netio.py`), which
+  reuses one L3 socket for the generator's lifetime instead of opening/closing a
+  raw socket per packet — less CPU and fd churn at high rates.
 - Heavy preset: 16 bulk generators × 100k pps × 2000 batch.
 
 ### Testing
@@ -179,7 +183,7 @@ sudo trafficgoat web --web-port 8080
 python -c "from trafficgoat.generators.auto import AutoBulkGenerator; print('OK')"
 ```
 
-Test files live in `tests/` — `test_config.py`, `test_engine_concurrency.py`, `test_stats.py`, `test_safety.py`, `test_web_auth.py`, `test_metrics_endpoint.py`, `test_application_socket.py`.
+Test files live in `tests/` — `test_config.py`, `test_engine_concurrency.py`, `test_stats.py`, `test_safety.py`, `test_web_auth.py`, `test_web_hardening.py`, `test_metrics_endpoint.py`, `test_application_socket.py`, `test_application_mixed.py`, `test_netio.py`, `test_generator_dryrun.py`.
 
 ## Dependencies
 

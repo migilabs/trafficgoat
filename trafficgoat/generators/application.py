@@ -122,23 +122,27 @@ class ApplicationGenerator(BaseGenerator):
             self.throttle()
 
     def _mixed_app(self):
-        """Randomly alternate between FTP, SSH, SMTP."""
+        """Randomly alternate between FTP, SSH, SMTP (one connection per cycle).
+
+        Do NOT reassign ``self.name`` here. The generator registered itself with
+        StatsCollector under the stable ``app:mixed`` name in ``start()``; writing
+        ``app:ftp`` / ``app:ssh`` / ``app:smtp`` into ``self.name`` would send
+        every ``stats.update()`` to a name that was never registered, so the
+        counts would be silently dropped and the generator would never be
+        unregistered under its real name on stop.
+        """
         self.stats.log(f"{self.name}: Mixed application traffic to {self.target}")
-        methods = [self._ftp_sim, self._ssh_sim, self._smtp_sim]
+        # (port, payload factory) for each application protocol in the mix.
+        variants = [
+            (21, lambda: "USER {}\r\nPASS test\r\nQUIT\r\n".format(
+                random.choice(["admin", "root", "ftp", "anonymous"])).encode()),
+            (22, lambda: b"SSH-2.0-OpenSSH_9.0\r\n"),
+            (25, lambda: b"EHLO test\r\nQUIT\r\n"),
+        ]
         start = time.monotonic()
         while not self.should_stop():
             if self.deadline_reached(start):
                 break
-            method = random.choice(methods)
-            # Run one iteration of each method
-            self.subtype = method.__name__.replace("_sim", "").lstrip("_")
-            self.name = f"app:{self.subtype}"
-            # Do a single connection
-            if method == self._ftp_sim:
-                user = random.choice(["admin", "root", "ftp", "anonymous"])
-                self._tcp_connect_send(21, f"USER {user}\r\nPASS test\r\nQUIT\r\n".encode())
-            elif method == self._ssh_sim:
-                self._tcp_connect_send(22, b"SSH-2.0-OpenSSH_9.0\r\n")
-            else:
-                self._tcp_connect_send(25, b"EHLO test\r\nQUIT\r\n")
+            port, make_payload = random.choice(variants)
+            self._tcp_connect_send(port, make_payload())
             self.throttle()

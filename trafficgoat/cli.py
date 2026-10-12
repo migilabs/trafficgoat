@@ -3,7 +3,6 @@
 import argparse
 import os
 import sys
-import time
 
 from trafficgoat import __version__
 from trafficgoat.config import TrafficConfig, ConfigError

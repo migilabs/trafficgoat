@@ -20,9 +20,10 @@ import struct
 import subprocess
 import time
 
-from scapy.all import IP, TCP, UDP, ICMP, DNS, DNSQR, NTP, Raw, send
+from scapy.all import IP, TCP, UDP, ICMP, DNS, DNSQR, NTP, Raw
 
 from trafficgoat.generators.base import BaseGenerator
+from trafficgoat.generators._netio import packet_sender
 from trafficgoat.config import GeneratorConfig
 from trafficgoat.stats import StatsCollector
 
@@ -206,50 +207,6 @@ SAAS_DOMAINS = [
     "api.lever.co", "api.gusto.com",
 ]
 
-# Exotic protocol port mappings
-EXOTIC_PORTS = {
-    "snmp": 161,       # Simple Network Management Protocol
-    "snmp_trap": 162,  # SNMP Traps
-    "sip": 5060,       # Session Initiation Protocol
-    "sips": 5061,      # SIP over TLS
-    "ldap": 389,       # Lightweight Directory Access Protocol
-    "ldaps": 636,      # LDAP over TLS
-    "radius": 1812,    # RADIUS Authentication
-    "radius_acct": 1813,  # RADIUS Accounting
-    "mqtt": 1883,      # Message Queuing Telemetry Transport
-    "mqtts": 8883,     # MQTT over TLS
-    "coap": 5683,      # Constrained Application Protocol
-    "rtsp": 554,       # Real Time Streaming Protocol
-    "syslog": 514,     # Syslog
-    "tftp": 69,        # Trivial File Transfer Protocol
-    "nfs": 2049,       # Network File System
-    "bgp": 179,        # Border Gateway Protocol
-    "irc": 6667,       # Internet Relay Chat
-    "xmpp": 5222,      # Extensible Messaging and Presence Protocol
-    "memcached": 11211,  # Memcached
-    "redis": 6379,     # Redis
-    "elasticsearch": 9200,  # Elasticsearch
-    "kafka": 9092,     # Apache Kafka
-    "amqp": 5672,      # Advanced Message Queuing Protocol (RabbitMQ)
-    "grpc": 50051,     # gRPC default port
-    "modbus": 502,     # Modbus (ICS/SCADA)
-    "dnp3": 20000,     # DNP3 (ICS/SCADA)
-    "bacnet": 47808,   # BACnet (Building Automation)
-    "openvpn": 1194,   # OpenVPN
-    "wireguard": 51820,  # WireGuard
-    "stun": 3478,      # STUN (WebRTC)
-    "turn": 3478,      # TURN (WebRTC)
-    "quic": 443,       # QUIC (UDP-based HTTP/3)
-    "dhcp": 67,        # DHCP Server
-    "netflow": 2055,   # NetFlow
-    "ipfix": 4739,     # IPFIX
-    "sflow": 6343,     # sFlow
-    "kerberos": 88,    # Kerberos authentication
-    "smb": 445,        # SMB / CIFS
-    "rdp": 3389,       # Remote Desktop Protocol
-    "vnc": 5900,       # VNC
-}
-
 HTTP_USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15",
@@ -356,28 +313,28 @@ class AutoRawGenerator(BaseGenerator):
             0.05, 0.03, 0.03, 0.04,
         ]
 
-        while not self.should_stop():
-            if self.deadline_reached(start):
-                break
+        with packet_sender(self.dry_run) as send_pkt:
+            while not self.should_stop():
+                if self.deadline_reached(start):
+                    break
 
-            packets = []
-            for _ in range(self.batch_size):
-                proto = random.choices(protocols, weights=weights, k=1)[0]
-                dst = random.choice(self.destinations)
-                pkt = self._build_packet(dst, proto)
-                if pkt is not None:
-                    packets.append(pkt)
+                packets = []
+                for _ in range(self.batch_size):
+                    proto = random.choices(protocols, weights=weights, k=1)[0]
+                    dst = random.choice(self.destinations)
+                    pkt = self._build_packet(dst, proto)
+                    if pkt is not None:
+                        packets.append(pkt)
 
-            if packets:
-                if not self.dry_run:
+                if packets:
                     try:
-                        send(packets, verbose=0, inter=0)
+                        send_pkt(packets)
                     except Exception:
                         self.stats.update(self.name, errors=1)
-                total_bytes = sum(len(p) for p in packets)
-                self.stats.update(self.name, packets=len(packets), bytes_sent=total_bytes)
+                    total_bytes = sum(len(p) for p in packets)
+                    self.stats.update(self.name, packets=len(packets), bytes_sent=total_bytes)
 
-            self.throttle()
+                self.throttle()
 
     def _build_packet(self, dst, proto):
         """Build a single packet for the given destination and protocol.
@@ -653,30 +610,30 @@ class AutoBulkGenerator(BaseGenerator):
         )
         start = time.monotonic()
 
-        while not self.should_stop():
-            if self.deadline_reached(start):
-                break
+        with packet_sender(self.dry_run) as send_pkt:
+            while not self.should_stop():
+                if self.deadline_reached(start):
+                    break
 
-            packets = []
-            for _ in range(self.batch_size):
-                dst = random.choice(self.destinations)
-                port = random.choice(UDP_PORTS)
-                payload = random.choice(self._payloads)
-                pkt = IP(dst=dst) / UDP(
-                    sport=random.randint(1024, 65535),
-                    dport=port,
-                ) / payload
-                packets.append(pkt)
+                packets = []
+                for _ in range(self.batch_size):
+                    dst = random.choice(self.destinations)
+                    port = random.choice(UDP_PORTS)
+                    payload = random.choice(self._payloads)
+                    pkt = IP(dst=dst) / UDP(
+                        sport=random.randint(1024, 65535),
+                        dport=port,
+                    ) / payload
+                    packets.append(pkt)
 
-            if not self.dry_run:
                 try:
-                    send(packets, verbose=0, inter=0)
+                    send_pkt(packets)
                 except Exception:
                     self.stats.update(self.name, errors=1)
-            total_bytes = sum(len(p) for p in packets)
-            self.stats.update(self.name, packets=len(packets), bytes_sent=total_bytes)
+                total_bytes = sum(len(p) for p in packets)
+                self.stats.update(self.name, packets=len(packets), bytes_sent=total_bytes)
 
-            self.throttle()
+                self.throttle()
 
 
 class AutoHTTPGenerator(BaseGenerator):

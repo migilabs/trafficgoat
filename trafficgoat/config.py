@@ -60,11 +60,16 @@ class TrafficConfig:
 
     @classmethod
     def from_dict(cls, data: dict) -> "TrafficConfig":
-        """Create config from dictionary."""
-        generators = []
-        for gen_data in data.pop("generators", []):
-            generators.append(GeneratorConfig(**gen_data))
-        config = cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+        """Create config from dictionary.
+
+        Does not mutate ``data`` (previously ``generators`` was popped out of
+        the caller's dict as a side effect).
+        """
+        generators = [GeneratorConfig(**gen_data) for gen_data in data.get("generators", [])]
+        config = cls(**{
+            k: v for k, v in data.items()
+            if k != "generators" and k in cls.__dataclass_fields__
+        })
         config.generators = generators
         return config
 

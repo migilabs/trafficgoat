@@ -2,7 +2,7 @@
 
 import pytest
 
-from trafficgoat.config import TrafficConfig, ConfigError, parse_ports
+from trafficgoat.config import TrafficConfig, GeneratorConfig, ConfigError, parse_ports
 
 
 class TestValidate:
@@ -53,6 +53,36 @@ class TestParsePorts:
 
     def test_csv(self):
         assert parse_ports("80,443,8080") == [80, 443, 8080]
+
+
+class TestFromDict:
+    def test_builds_generators(self):
+        data = {
+            "target": "192.168.1.1",
+            "duration": 30,
+            "generators": [
+                {"type": "tcp_syn", "ports": "80,443", "rate": 200},
+                {"type": "dns", "subtype": "mixed", "rate": 50},
+            ],
+        }
+        cfg = TrafficConfig.from_dict(data)
+        assert cfg.target == "192.168.1.1"
+        assert cfg.duration == 30
+        assert len(cfg.generators) == 2
+        assert all(isinstance(g, GeneratorConfig) for g in cfg.generators)
+        assert cfg.generators[0].type == "tcp_syn"
+
+    def test_does_not_mutate_caller_dict(self):
+        """Regression: from_dict used to pop 'generators' out of the input."""
+        data = {"target": "10.0.0.1", "generators": [{"type": "udp"}]}
+        TrafficConfig.from_dict(data)
+        assert "generators" in data, "from_dict must not mutate the caller's dict"
+        assert data["generators"] == [{"type": "udp"}]
+
+    def test_unknown_keys_ignored(self):
+        cfg = TrafficConfig.from_dict({"target": "10.0.0.1", "bogus_key": 123})
+        assert cfg.target == "10.0.0.1"
+        assert not hasattr(cfg, "bogus_key")
 
 
 class TestDataclassFields:

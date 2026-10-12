@@ -1,11 +1,35 @@
-# TrafficGoat - Example Custom Configuration
+# TrafficGoat - Example Custom Configuration (annotated reference)
 # Usage: sudo trafficgoat custom -t 192.168.1.1 -c configs/example.yaml
+#
+# `custom` mode runs exactly the generators you list here. Each list item under
+# `generators:` becomes one generator running in its own thread at its own rate.
+#
+# Top-level keys
+#   target    Default target for generators that don't set their own `target`.
+#             Must be private (RFC1918/loopback/link-local) unless the run is
+#             started with --allow-public.
+#   duration  Run length in seconds (0 = run until stopped). A generator left at
+#             the default duration (60) inherits this value.
+#
+# Per-generator keys (all optional except `type`)
+#   type              Generator to run (see "Valid type values" at the bottom).
+#   subtype           Variant within that generator (see per-type notes below).
+#   target            Per-generator target; falls back to the top-level target.
+#   ports             Single ("80"), range ("1-1024") or CSV ("80,443,8080").
+#   rate              Packets/requests per second for THIS generator (1..1,000,000).
+#   duration          Per-generator run length; falls back to top-level duration.
+#   weight            Advisory share for your own documentation (not normalised).
+#   methods           HTTP methods to pick from (http only), e.g. [GET, POST].
+#   urls              Explicit URL list (http only); built from target+ports if omitted.
+#   count             Reserved; 0 = unlimited (driven by duration).
+#   options           Free-form map reserved for generator-specific tuning.
 
 target: "192.168.1.1"
 duration: 120
 
 generators:
   # TCP SYN flood - 40% of traffic
+  # subtype: syn | connect | fin | xmas | null | rst
   - type: tcp_syn
     subtype: syn
     ports: "80,443,8080,8443"
@@ -13,6 +37,7 @@ generators:
     weight: 0.4
 
   # UDP traffic - 20%
+  # subtype: random | dns | ntp
   - type: udp
     subtype: random
     ports: "53,123,161,500"
@@ -20,6 +45,7 @@ generators:
     weight: 0.2
 
   # ICMP ping - 10%
+  # subtype: echo | mixed
   - type: icmp
     subtype: echo
     rate: 50
@@ -36,7 +62,29 @@ generators:
       - PUT
 
   # DNS queries - 10%
+  # subtype: valid | random | nxdomain | mixed
   - type: dns
     subtype: mixed
     rate: 50
     weight: 0.1
+
+  # Application-layer simulation (optional; uncomment to enable)
+  # subtype: ftp | ssh | smtp | mixed
+  # - type: application
+  #   subtype: mixed
+  #   rate: 20
+
+  # Port scan pattern (optional; `portscan` does NOT need --enable-malicious)
+  # - type: portscan
+  #   subtype: portscan
+  #   ports: "1-1024"
+  #   rate: 100
+
+# Valid `type` values:
+#   tcp, tcp_syn, tcp_connect, udp, icmp, http, dns,
+#   ftp, ssh, smtp, application,
+#   malicious, portscan, bruteforce,
+#   auto_raw, auto_http, auto_tcp, auto_bulk, auto_curl, auto_saas
+#
+# `malicious` / `bruteforce` (and the ddos / amplification subtypes) only run
+# when the engine is started with --enable-malicious. Plain `portscan` does not.

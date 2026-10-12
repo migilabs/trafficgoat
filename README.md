@@ -5,7 +5,7 @@ Advanced network traffic generator for Linux - designed for firewall testing and
 ## Features
 
 - **13 Traffic Generators**: TCP (SYN/connect/flags), UDP, ICMP, HTTP/HTTPS, DNS, Application (FTP/SSH/SMTP), Malicious patterns (gated), plus six "auto" generators: raw, bulk, HTTP, TCP-connect, curl, and SaaS.
-- **~18 raw protocols** in auto mode: TCP, UDP, ICMP, DNS, NTP, SNMP, SIP, LDAP, MQTT, CoAP, RTSP, TFTP, NFS, STUN, SMB, RDP, plus exotic variants.
+- **18 raw protocols** in auto mode: TCP SYN, UDP, ICMP, DNS, NTP, SNMP, SIP, LDAP, RADIUS, MQTT, Syslog, Memcached, Modbus, BGP, QUIC, STUN, Kerberos, and NetFlow (crafted with Scapy + hand-built payloads).
 - **8 Subcommands**: `auto`, `stress`, `scan`, `mixed`, `protocol`, `stealth`, `custom`, `web`.
 - **Dual Interface**: Full CLI + Web UI with real-time dashboard, generate page, modes overview, live logs.
 - **Live Statistics**: Packets/s, bytes/s, per-generator breakdowns via Socket.IO (auto-updates every second).
@@ -18,6 +18,51 @@ Advanced network traffic generator for Linux - designed for firewall testing and
 ## Architecture Overview
 
 ![TrafficGoat Architecture](docs/architecture.svg)
+
+TrafficGoat is a small layered system. A request flows top-to-bottom; statistics
+flow back up to whichever interface is attached:
+
+```
+User input (CLI argparse  |  Web REST/Socket.IO)
+        │
+        ▼
+Safety layer      safety.check_target()  → default-deny public IPs (UnsafeTargetError)
+        │
+        ▼
+Mode layer        Mode.configure()       → builds GeneratorConfig objects, adds them to the engine
+        │
+        ▼
+Engine            TrafficEngine          → starts each generator in its own daemon thread,
+        │                                   runs a duration timer + a ~1s stats-emit loop
+        ▼
+Generator layer   BaseGenerator subclasses → craft packets (Scapy / sockets / requests / curl)
+        │                                    and call stats.update() per batch
+        ▼
+Stats layer       StatsCollector         → lock-protected aggregation; fans out to the CLI
+                                            printer and/or Socket.IO + /metrics
+```
+
+**Key design points**
+
+- **Layered & pluggable.** Generators and modes are registered in small
+  dictionaries (`generators/__init__.py` `GENERATORS`, `modes/__init__.py`
+  `MODES`), so adding one is a class plus a registry entry — no engine changes.
+- **Thread-per-generator.** The engine runs every generator in a daemon thread,
+  plus one duration-timer thread and one stats-emit thread. Shutdown is
+  two-phase: signal all generators to stop, then join them with a bounded
+  timeout, so a slow generator can't wedge the whole run.
+- **Safety is enforced before any thread starts.** `check_target()` resolves
+  hostnames (A + AAAA) and rejects the target if *any* resolved address is
+  public unless `--allow-public` is set. Aggressive `malicious` subtypes are
+  separately gated behind `--enable-malicious`.
+- **One stats model, many sinks.** `StatsCollector` is the single source of
+  truth. The CLI subscribes a terminal printer; the web app subscribes a
+  Socket.IO broadcaster and also exposes `/metrics` for Prometheus.
+- **Efficient send path.** Scapy generators hold one reused layer-3 socket open
+  for their lifetime (`generators/_netio.py`) instead of opening and closing a
+  raw socket per packet, which lowers CPU and file-descriptor churn at high
+  packet rates. The send path degrades gracefully to scapy's module-level
+  `send()` if a persistent socket can't be created.
 
 ## Requirements
 
@@ -133,6 +178,14 @@ All endpoints require the auth token (unless explicitly disabled):
 | `/api/version`      | GET    | TrafficGoat version                    |
 | `/metrics`          | GET    | Prometheus-formatted metrics           |
 
+### Environment variables (web mode)
+
+| Variable                   | Default                    | Purpose                                                                 |
+| -------------------------- | -------------------------- | ----------------------------------------------------------------------- |
+| `TRAFFICGOAT_TOKEN`        | *(generated to 0600 file)* | API auth token. Set to a fixed value to pin it; set to `""` to disable auth (warns loudly). |
+| `TRAFFICGOAT_SECRET_KEY`   | *(random per process)*     | Flask session secret.                                                   |
+| `TRAFFICGOAT_CORS_ORIGINS` | `host:port` of the server  | Comma-separated Socket.IO CORS allowlist, or `*` to open it. Not widened by `--allow-public`. |
+
 ## Modes
 
 | Mode       | Description                                                                    |
@@ -159,26 +212,61 @@ bandwidth. A 5-minute heavy run generates multiple gigabytes of traffic.
 
 ## Custom Configuration
 
-See `configs/example.yaml` for a full example:
+`custom` mode is driven by a YAML file (`-c config.yaml`). The file has a few
+top-level keys plus a `generators:` list; each list entry configures one
+generator. See `configs/example.yaml` for a fully-commented reference.
 
 ```yaml
-target: "192.168.1.1"
-duration: 120
+target: "192.168.1.1"   # inherited by generators that omit their own target
+duration: 120           # seconds; inherited by generators left at the default
 generators:
-  - type: tcp_syn
-    ports: "80,443"
-    rate: 200
-    weight: 0.4
+  - type: tcp_syn       # which generator to run (see table below)
+    subtype: syn        # variant within that generator
+    ports: "80,443"     # single / range (1-1024) / CSV
+    rate: 200           # packets per second for THIS generator
+    weight: 0.4         # advisory share, for your own documentation
   - type: http
-    ports: "80"
+    ports: "80,443"
     rate: 100
     methods: [GET, POST]
-    weight: 0.3
   - type: dns
     subtype: mixed
     rate: 50
-    weight: 0.3
 ```
+
+### Top-level keys
+
+| Key        | Default       | Meaning                                                        |
+| ---------- | ------------- | -------------------------------------------------------------- |
+| `target`   | `127.0.0.1`   | Default target; a generator without its own `target` inherits it. Must be private unless the run uses `--allow-public`. |
+| `duration` | `60`          | Run length in seconds (`0` = run until stopped). A generator left at the default `60` inherits this value. |
+
+### Per-generator keys (`GeneratorConfig`)
+
+| Key                | Default   | Applies to        | Meaning                                                                 |
+| ------------------ | --------- | ----------------- | ----------------------------------------------------------------------- |
+| `type` *(required)*| —         | all               | Generator to instantiate (see valid values below).                      |
+| `subtype`          | `""`      | tcp/udp/icmp/dns/application | Variant within the generator (e.g. `syn`, `connect`, `fin`, `xmas`, `null`, `rst` for TCP; `random`/`dns`/`ntp` for UDP; `echo`/`mixed` for ICMP; `valid`/`random`/`nxdomain`/`mixed` for DNS; `ftp`/`ssh`/`smtp`/`mixed` for application). |
+| `target`           | `""`      | all               | Per-generator target; falls back to the top-level `target`.             |
+| `ports`            | `"80"`    | tcp/udp/http      | Single port, range (`1-1024`) or CSV (`80,443,8080`).                   |
+| `rate`             | `100`     | all               | Packets/requests per second for this generator (1..1,000,000).          |
+| `duration`         | `60`      | all               | Per-generator run length; falls back to the top-level `duration`.       |
+| `weight`           | `1.0`     | all               | Advisory traffic share for documentation; not auto-normalised.          |
+| `count`            | `0`       | all               | Reserved (`0` = unlimited, driven by `duration`).                       |
+| `methods`          | `[GET]`   | http              | HTTP methods to choose from (`GET`, `POST`, `PUT`, …).                   |
+| `urls`             | `[]`      | http              | Explicit URL list; if empty, URLs are built from `target` + `ports`.    |
+| `options`          | `{}`      | all               | Free-form extra options bag (reserved for generator-specific tuning).   |
+| `enable_malicious` | `false`   | malicious         | Allow gated subtypes; normally set from the `--enable-malicious` flag.  |
+
+### Valid `type` values
+
+`tcp`, `tcp_syn`, `tcp_connect`, `udp`, `icmp`, `http`, `dns`, `ftp`, `ssh`,
+`smtp`, `application`, `malicious`, `portscan`, `bruteforce`, `auto_raw`,
+`auto_http`, `auto_tcp`, `auto_bulk`, `auto_curl`, `auto_saas`.
+
+> `malicious` / `bruteforce` (and the `ddos` / `amplification` subtypes) only
+> run when the engine is started with `--enable-malicious`. Plain `portscan`
+> does not require the flag.
 
 ## CLI Options
 

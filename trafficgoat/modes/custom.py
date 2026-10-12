@@ -1,6 +1,6 @@
 """Custom mode - user-defined traffic patterns via YAML config."""
 
-from trafficgoat.config import TrafficConfig, GeneratorConfig
+from trafficgoat.config import TrafficConfig
 from trafficgoat.engine import TrafficEngine
 from trafficgoat.stats import StatsCollector
 from trafficgoat.generators import GENERATORS
