@@ -115,7 +115,7 @@ Common safety flags (most modes):
 - `--allow-public` — permit non-private targets (default: deny).
 - `--enable-malicious` — permit gated `malicious` subtypes (bruteforce/ddos/amplification).
 
-Web flags: `--host`, `--web-port`, `--dev` (unsafe werkzeug dev server), plus the safety flags above.
+Web flags: `--host`, `--web-port`, `--dev` (enable the Werkzeug debugger), plus the safety flags above.
 
 Web environment variables:
 - `TRAFFICGOAT_TOKEN` — set the API auth token. If unset, one is generated and
@@ -192,7 +192,7 @@ Pinned versions live in `requirements.txt`. Current set:
 - **scapy** — raw packet crafting and sending
 - **flask** — web framework
 - **flask-socketio** — real-time WebSocket support
-- **eventlet** — async I/O backend for Socket.IO
+- **simple-websocket** — WebSocket transport for Socket.IO in Flask-SocketIO's threading async mode (pulled in transitively by python-engineio; pinned explicitly because the dashboard depends on it)
 - **requests** — HTTP client (sync) for application-layer traffic
 - **aiohttp** — HTTP client (async) used by high-rate HTTP generators
 - **pyyaml** — YAML config parsing
@@ -204,7 +204,7 @@ When changing dependencies, update `requirements.txt` AND this list AND mention 
 - Requires **root privileges** for raw socket access (Scapy).
 - Requires **Linux** (raw sockets, Scapy layer 3 sending).
 - Python **3.10+** required (type hint syntax).
-- Web UI uses **eventlet** async mode for Socket.IO.
+- Web UI uses Flask-SocketIO's **threading** async mode for Socket.IO (served via Werkzeug with `threaded=True`; WebSocket transport comes from `simple-websocket`, with HTTP long-polling as the fallback). No greenlet runtime or monkey-patching.
 - **Targets are private by default** — non-RFC1918/loopback/link-local targets require `--allow-public`.
 - **Aggressive `malicious` subtypes are gated** — bruteforce/ddos/amplification need `--enable-malicious`.
 - This tool is for **authorized security testing only**.

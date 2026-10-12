@@ -133,7 +133,7 @@ Examples:
     web_parser.add_argument("--web-port", type=int, default=8080, help="Web UI port (default: 8080)")
     web_parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     web_parser.add_argument("--dev", action="store_true",
-                            help="Use the unsafe werkzeug dev server (development only).")
+                            help="Enable the Werkzeug debugger (development only).")
     _add_safety_flags(web_parser)
 
     return parser
@@ -249,10 +249,15 @@ def run_web(args):
         host=host,
         port=port,
     )
-    # The werkzeug dev server is not safe for production. Require --dev to
-    # acknowledge this.
-    socketio.run(app, host=host, port=port, debug=args.verbose,
-                 allow_unsafe_werkzeug=bool(args.dev))
+    # In threading async mode, Flask-SocketIO serves requests through Werkzeug's
+    # WSGI server (with threaded=True). That's fine for this local, root-run
+    # testing tool, but Werkzeug refuses to start outside an interactive TTY
+    # (e.g. under systemd/Docker) unless we opt in, so pass
+    # allow_unsafe_werkzeug=True. --dev turns on the Werkzeug debugger; the
+    # auto-reloader stays off so a root process holding raw sockets never
+    # re-execs itself mid-run.
+    socketio.run(app, host=host, port=port, debug=bool(args.dev),
+                 use_reloader=False, allow_unsafe_werkzeug=True)
 
 
 def main():
