@@ -4,9 +4,10 @@ import os
 import random
 import time
 
-from scapy.all import IP, ICMP, send
+from scapy.all import IP, ICMP
 
 from trafficgoat.generators.base import BaseGenerator
+from trafficgoat.generators._netio import packet_sender
 from trafficgoat.config import GeneratorConfig
 from trafficgoat.stats import StatsCollector
 
@@ -32,18 +33,18 @@ class ICMPGenerator(BaseGenerator):
         self.stats.log(f"{self.name}: Ping flood to {self.target}")
         seq = 0
         start = time.monotonic()
-        while not self.should_stop():
-            if self.deadline_reached(start):
-                break
-            payload = os.urandom(random.randint(56, 512))
-            pkt = IP(dst=self.target) / ICMP(
-                type=8, code=0, id=random.randint(1, 65535), seq=seq
-            ) / payload
-            if not self.dry_run:
-                send(pkt, verbose=0)
-            self.stats.update(self.name, packets=1, bytes_sent=len(pkt))
-            seq = (seq + 1) % 65536
-            self.throttle()
+        with packet_sender(self.dry_run) as send_pkt:
+            while not self.should_stop():
+                if self.deadline_reached(start):
+                    break
+                payload = os.urandom(random.randint(56, 512))
+                pkt = IP(dst=self.target) / ICMP(
+                    type=8, code=0, id=random.randint(1, 65535), seq=seq
+                ) / payload
+                send_pkt(pkt)
+                self.stats.update(self.name, packets=1, bytes_sent=len(pkt))
+                seq = (seq + 1) % 65536
+                self.throttle()
 
     def _mixed_icmp(self):
         """Send various ICMP types."""
@@ -59,12 +60,12 @@ class ICMPGenerator(BaseGenerator):
         ]
         self.stats.log(f"{self.name}: Mixed ICMP types to {self.target}")
         start = time.monotonic()
-        while not self.should_stop():
-            if self.deadline_reached(start):
-                break
-            icmp_type, icmp_code, desc = random.choice(icmp_types)
-            pkt = IP(dst=self.target) / ICMP(type=icmp_type, code=icmp_code) / os.urandom(56)
-            if not self.dry_run:
-                send(pkt, verbose=0)
-            self.stats.update(self.name, packets=1, bytes_sent=len(pkt))
-            self.throttle()
+        with packet_sender(self.dry_run) as send_pkt:
+            while not self.should_stop():
+                if self.deadline_reached(start):
+                    break
+                icmp_type, icmp_code, desc = random.choice(icmp_types)
+                pkt = IP(dst=self.target) / ICMP(type=icmp_type, code=icmp_code) / os.urandom(56)
+                send_pkt(pkt)
+                self.stats.update(self.name, packets=1, bytes_sent=len(pkt))
+                self.throttle()

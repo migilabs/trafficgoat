@@ -4,9 +4,10 @@ import random
 import socket
 import time
 
-from scapy.all import IP, TCP, send, RandShort
+from scapy.all import IP, TCP, RandShort
 
 from trafficgoat.generators.base import BaseGenerator
+from trafficgoat.generators._netio import packet_sender
 from trafficgoat.config import GeneratorConfig, parse_ports
 from trafficgoat.stats import StatsCollector
 
@@ -42,20 +43,20 @@ class TCPGenerator(BaseGenerator):
         """Send TCP SYN packets using scapy."""
         self.stats.log(f"{self.name}: SYN flood to {self.target} ports {self.ports}")
         start = time.monotonic()
-        while not self.should_stop():
-            if self.deadline_reached(start):
-                break
-            port = random.choice(self.port_list)
-            pkt = IP(dst=self.target) / TCP(
-                sport=int(RandShort()),
-                dport=port,
-                flags="S",
-                seq=random.randint(0, 2**32 - 1),
-            )
-            if not self.dry_run:
-                send(pkt, verbose=0)
-            self.stats.update(self.name, packets=1, bytes_sent=len(pkt))
-            self.throttle()
+        with packet_sender(self.dry_run) as send_pkt:
+            while not self.should_stop():
+                if self.deadline_reached(start):
+                    break
+                port = random.choice(self.port_list)
+                pkt = IP(dst=self.target) / TCP(
+                    sport=int(RandShort()),
+                    dport=port,
+                    flags="S",
+                    seq=random.randint(0, 2**32 - 1),
+                )
+                send_pkt(pkt)
+                self.stats.update(self.name, packets=1, bytes_sent=len(pkt))
+                self.throttle()
 
     def _full_connect(self):
         """Full TCP connect using socket."""
@@ -89,16 +90,16 @@ class TCPGenerator(BaseGenerator):
         flag_name = flags if flags else "NULL"
         self.stats.log(f"{self.name}: {flag_name} scan to {self.target} ports {self.ports}")
         start = time.monotonic()
-        while not self.should_stop():
-            if self.deadline_reached(start):
-                break
-            port = random.choice(self.port_list)
-            pkt = IP(dst=self.target) / TCP(
-                sport=int(RandShort()),
-                dport=port,
-                flags=flags,
-            )
-            if not self.dry_run:
-                send(pkt, verbose=0)
-            self.stats.update(self.name, packets=1, bytes_sent=len(pkt))
-            self.throttle()
+        with packet_sender(self.dry_run) as send_pkt:
+            while not self.should_stop():
+                if self.deadline_reached(start):
+                    break
+                port = random.choice(self.port_list)
+                pkt = IP(dst=self.target) / TCP(
+                    sport=int(RandShort()),
+                    dport=port,
+                    flags=flags,
+                )
+                send_pkt(pkt)
+                self.stats.update(self.name, packets=1, bytes_sent=len(pkt))
+                self.throttle()

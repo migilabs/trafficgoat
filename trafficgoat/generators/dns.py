@@ -4,9 +4,10 @@ import random
 import string
 import time
 
-from scapy.all import IP, UDP, DNS, DNSQR, send
+from scapy.all import IP, UDP, DNS, DNSQR
 
 from trafficgoat.generators.base import BaseGenerator
+from trafficgoat.generators._netio import packet_sender
 from trafficgoat.config import GeneratorConfig
 from trafficgoat.stats import StatsCollector
 
@@ -29,26 +30,30 @@ class DNSGenerator(BaseGenerator):
         super().__init__(config, stats, dry_run)
         self.subtype = config.subtype or "mixed"
         self.name = f"dns:{self.subtype}"
+        # Set for the duration of generate() so the per-query helper can reuse
+        # a single socket instead of opening one per packet.
+        self._send_pkt = None
 
     def generate(self):
-        if self.subtype == "valid":
-            self._valid_queries()
-        elif self.subtype == "random":
-            self._random_subdomain()
-        elif self.subtype == "nxdomain":
-            self._nxdomain_flood()
-        else:
-            self._mixed_dns()
+        with packet_sender(self.dry_run) as send_pkt:
+            self._send_pkt = send_pkt
+            if self.subtype == "valid":
+                self._valid_queries()
+            elif self.subtype == "random":
+                self._random_subdomain()
+            elif self.subtype == "nxdomain":
+                self._nxdomain_flood()
+            else:
+                self._mixed_dns()
 
     def _send_dns_query(self, domain: str, qtype: str = "A"):
-        """Send a single DNS query packet."""
+        """Send a single DNS query packet (only valid while generate() runs)."""
         pkt = IP(dst=self.target) / UDP(dport=53, sport=random.randint(1024, 65535)) / DNS(
             id=random.randint(0, 65535),
             rd=1,
             qd=DNSQR(qname=domain, qtype=qtype),
         )
-        if not self.dry_run:
-            send(pkt, verbose=0)
+        self._send_pkt(pkt)
         self.stats.update(self.name, packets=1, bytes_sent=len(pkt))
 
     def _valid_queries(self):
