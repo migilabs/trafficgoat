@@ -227,7 +227,13 @@ def create_app(
             f"http://localhost:{port}",
             f"http://127.0.0.1:{port}",
         ]
-    socketio.init_app(app, cors_allowed_origins=cors_origins, async_mode="eventlet")
+    # Threading async mode: no greenlet runtime, no monkey-patching. WebSocket
+    # transport is provided by `simple-websocket` (pulled in via python-engineio);
+    # without it Socket.IO still works over HTTP long-polling, and the dashboard
+    # JS has its own polling fallback. This replaces the eventlet backend, which
+    # upstream now maintains in bugfix-only mode (and which is outright broken on
+    # Python 3.13).
+    socketio.init_app(app, cors_allowed_origins=cors_origins, async_mode="threading")
 
     # Cap request body size; the API only accepts small JSON payloads.
     app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024  # 1 MiB

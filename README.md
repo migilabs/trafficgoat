@@ -287,7 +287,7 @@ Global Options (most modes):
 Web mode:
   --host                 Bind address (default: 127.0.0.1)
   --web-port             Listen port (default: 8080)
-  --dev                  Use the unsafe werkzeug dev server (development only)
+  --dev                  Enable the Werkzeug debugger (development only)
 ```
 
 ## Safety model

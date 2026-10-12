@@ -4,4 +4,4 @@ flask-socketio==5.3.6
 requests==2.32.3
 aiohttp==3.9.5
 pyyaml==6.0.2
-eventlet==0.36.1
+simple-websocket==1.1.0
